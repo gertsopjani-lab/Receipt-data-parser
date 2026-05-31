@@ -1,0 +1,759 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Receipt to Spreadsheet</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    body { font-family: 'Inter', sans-serif; }
+
+    .drop-zone-active {
+      border-color: #6366f1 !important;
+      background-color: #eef2ff !important;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner { animation: spin 0.8s linear infinite; }
+
+    @keyframes pulse-receipt {
+      0%, 100% { opacity: 0.4; transform: scale(1); }
+      50%       { opacity: 0.7; transform: scale(1.03); }
+    }
+    .receipt-pulse { animation: pulse-receipt 2.8s ease-in-out infinite; }
+
+    @keyframes fade-in-up {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in-up { animation: fade-in-up 0.4s ease-out forwards; }
+
+    @keyframes progress-bar {
+      0%   { width: 0%; }
+      40%  { width: 60%; }
+      80%  { width: 85%; }
+      100% { width: 95%; }
+    }
+    .progress-bar-animate { animation: progress-bar 6s ease-out forwards; }
+
+    .table-row-hover:hover { background-color: #f5f3ff; }
+    .receipt-shadow {
+      box-shadow: 0 4px 6px -1px rgba(99,102,241,0.08), 0 20px 60px -10px rgba(99,102,241,0.12);
+    }
+
+    /* Sidebar slide-in */
+    #history-sidebar {
+      transform: translateX(100%);
+      transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+    }
+    #history-sidebar.open { transform: translateX(0); }
+
+    /* Sidebar backdrop */
+    #history-backdrop {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+    }
+    #history-backdrop.open { opacity: 1; pointer-events: auto; }
+
+    .history-item { transition: background 0.15s; }
+    .history-item:hover { background: #f5f3ff; }
+
+    @keyframes slide-in-right {
+      from { opacity: 0; transform: translateX(12px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .slide-in { animation: slide-in-right 0.25s ease-out forwards; }
+  </style>
+</head>
+<body class="h-full bg-gradient-to-br from-slate-50 via-indigo-50/30 to-purple-50/20 min-h-screen">
+
+  <!-- ── History Sidebar Backdrop ── -->
+  <div id="history-backdrop"
+    onclick="closeSidebar()"
+    class="fixed inset-0 bg-black/20 z-40 backdrop-blur-sm">
+  </div>
+
+  <!-- ── History Sidebar ── -->
+  <aside id="history-sidebar"
+    class="fixed right-0 top-0 h-full w-80 bg-white z-50 flex flex-col shadow-2xl border-l border-slate-100">
+
+    <!-- Sidebar Header -->
+    <div class="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+      <div>
+        <h2 class="font-bold text-slate-800 text-base">Scan History</h2>
+        <p id="sidebar-count" class="text-xs text-slate-400 mt-0.5">0 receipts saved</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="clearAllHistory()"
+          id="clear-all-btn"
+          class="hidden text-xs text-rose-500 hover:text-rose-700 hover:underline transition-colors">
+          Clear all
+        </button>
+        <button onclick="closeSidebar()"
+          class="w-8 h-8 flex items-center justify-center rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-all">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Empty history state -->
+    <div id="history-empty" class="flex-1 flex flex-col items-center justify-center px-6 text-center py-12">
+      <div class="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mb-3">
+        <svg class="w-6 h-6 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+      </div>
+      <p class="text-sm font-medium text-slate-500">No scans yet</p>
+      <p class="text-xs text-slate-400 mt-1">Your analyzed receipts will appear here automatically</p>
+    </div>
+
+    <!-- History list -->
+    <ul id="history-list" class="hidden flex-1 overflow-y-auto divide-y divide-slate-50 py-1">
+    </ul>
+
+    <!-- Sidebar Footer -->
+    <div class="px-5 py-4 border-t border-slate-100">
+      <button onclick="exportAllExcel()"
+        id="export-all-btn"
+        class="hidden w-full flex items-center justify-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-4 py-2.5 rounded-xl transition-all">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+        </svg>
+        Export All as Excel
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── Main Content ── -->
+  <div class="max-w-4xl mx-auto px-4 py-10">
+
+    <!-- Header -->
+    <div class="text-center mb-10">
+      <div class="flex items-center justify-center gap-3 mb-4">
+        <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-200">
+          <svg class="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+        </div>
+      </div>
+      <h1 class="text-3xl font-bold text-slate-800 tracking-tight">Receipt to Spreadsheet</h1>
+      <p class="mt-2 text-slate-500 text-sm">Upload a receipt image and instantly extract itemized data with AI</p>
+
+      <!-- History toggle button -->
+      <button onclick="toggleSidebar()"
+        id="history-toggle-btn"
+        class="mt-4 inline-flex items-center gap-2 text-xs font-medium text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-4 py-2 rounded-xl transition-all">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span id="history-btn-label">Scan History</span>
+      </button>
+
+      {% if not provider %}
+      <div class="mt-4 inline-flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-sm px-4 py-2 rounded-xl">
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
+        </svg>
+        No AI API key — add <code class="font-mono bg-amber-100 px-1 rounded">OPENAI_API_KEY</code> or <code class="font-mono bg-amber-100 px-1 rounded">GEMINI_API_KEY</code> to secrets
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Upload Card -->
+    <div class="bg-white rounded-3xl receipt-shadow border border-slate-100 overflow-hidden mb-6">
+
+      <div id="drop-zone"
+        class="relative border-2 border-dashed border-slate-200 rounded-2xl m-5 transition-all duration-200 cursor-pointer group"
+        onclick="document.getElementById('file-input').click()">
+
+        <input id="file-input" type="file" accept=".png,.jpg,.jpeg,.webp" class="hidden" />
+
+        <!-- Empty state -->
+        <div id="empty-state" class="flex flex-col items-center justify-center py-14 px-6 text-center">
+          <div class="receipt-pulse mb-6">
+            <svg width="90" height="112" viewBox="0 0 90 112" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="10" y="0" width="70" height="100" rx="6" fill="#eef2ff" stroke="#c7d2fe" stroke-width="1.5"/>
+              <path d="M10 100 Q15 106 20 100 Q25 106 30 100 Q35 106 40 100 Q45 106 50 100 Q55 106 60 100 Q65 106 70 100 Q75 106 80 100" stroke="#c7d2fe" stroke-width="1.5" fill="none"/>
+              <rect x="20" y="16" width="30" height="4" rx="2" fill="#a5b4fc"/>
+              <rect x="20" y="28" width="50" height="2.5" rx="1.5" fill="#e0e7ff"/>
+              <rect x="20" y="36" width="40" height="2.5" rx="1.5" fill="#e0e7ff"/>
+              <rect x="20" y="44" width="45" height="2.5" rx="1.5" fill="#e0e7ff"/>
+              <rect x="20" y="52" width="35" height="2.5" rx="1.5" fill="#e0e7ff"/>
+              <rect x="20" y="62" width="50" height="1" rx="0.5" fill="#c7d2fe"/>
+              <rect x="20" y="70" width="20" height="3" rx="1.5" fill="#818cf8"/>
+              <rect x="55" y="70" width="15" height="3" rx="1.5" fill="#6366f1"/>
+              <rect x="22" y="82" width="3" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="27" y="82" width="2" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="31" y="82" width="4" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="37" y="82" width="2" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="41" y="82" width="3" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="46" y="82" width="2" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="50" y="82" width="4" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="56" y="82" width="2" height="10" rx="1" fill="#c7d2fe"/>
+              <rect x="60" y="82" width="5" height="10" rx="1" fill="#c7d2fe"/>
+            </svg>
+          </div>
+          <p class="text-slate-700 font-semibold text-base">Drop your receipt here</p>
+          <p class="text-slate-400 text-sm mt-1">or click to browse files</p>
+          <div class="mt-4 flex items-center gap-2">
+            <span class="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-full px-3 py-1">PNG</span>
+            <span class="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-full px-3 py-1">JPG</span>
+            <span class="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-full px-3 py-1">WebP</span>
+          </div>
+          <p class="text-xs text-slate-300 mt-3">Max 16 MB</p>
+        </div>
+
+        <!-- Preview state -->
+        <div id="preview-state" class="hidden items-center gap-4 p-5">
+          <div class="flex-shrink-0 w-16 h-16 rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+            <img id="preview-img" src="" alt="Receipt preview" class="w-full h-full object-cover" />
+          </div>
+          <div class="flex-1 min-w-0">
+            <p id="preview-filename" class="text-sm font-medium text-slate-700 truncate"></p>
+            <p id="preview-filesize" class="text-xs text-slate-400 mt-0.5"></p>
+          </div>
+          <button id="clear-btn" onclick="event.stopPropagation(); clearFile();"
+            class="flex-shrink-0 text-slate-400 hover:text-rose-500 transition-colors p-1.5 rounded-lg hover:bg-rose-50">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="px-5 pb-5">
+        <button id="analyze-btn" onclick="analyzeReceipt()" disabled
+          class="w-full py-3.5 px-6 rounded-2xl font-semibold text-sm transition-all duration-200
+            bg-indigo-600 text-white
+            disabled:opacity-40 disabled:cursor-not-allowed
+            enabled:hover:bg-indigo-700 enabled:hover:shadow-lg enabled:hover:shadow-indigo-200
+            enabled:active:scale-[0.98]">
+          Analyze Receipt
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-state" class="hidden">
+      <div class="bg-white rounded-3xl receipt-shadow border border-slate-100 p-8 text-center fade-in-up">
+        <div class="flex justify-center mb-5">
+          <div class="w-14 h-14 rounded-full border-4 border-indigo-100 border-t-indigo-600 spinner"></div>
+        </div>
+        <p class="text-slate-700 font-semibold text-base" id="loading-text">Analyzing your receipt...</p>
+        <p class="text-slate-400 text-sm mt-1">This usually takes 5–10 seconds</p>
+        <div class="mt-5 max-w-xs mx-auto h-1.5 bg-slate-100 rounded-full overflow-hidden">
+          <div id="progress-bar" class="h-full bg-gradient-to-r from-indigo-400 to-purple-500 rounded-full w-0"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Error State -->
+    <div id="error-state" class="hidden">
+      <div class="bg-rose-50 border border-rose-200 rounded-3xl p-6 flex items-start gap-4 fade-in-up">
+        <div class="flex-shrink-0 w-10 h-10 rounded-xl bg-rose-100 flex items-center justify-center">
+          <svg class="w-5 h-5 text-rose-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z"/>
+          </svg>
+        </div>
+        <div>
+          <p class="font-semibold text-rose-800 text-sm">Something went wrong</p>
+          <p id="error-message" class="text-rose-600 text-sm mt-1"></p>
+          <button onclick="resetToUpload()" class="mt-3 text-xs text-rose-700 underline hover:no-underline">Try again</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Results State -->
+    <div id="results-state" class="hidden">
+      <div class="bg-white rounded-3xl receipt-shadow border border-slate-100 overflow-hidden fade-in-up">
+
+        <!-- Results Header -->
+        <div class="px-6 pt-6 pb-4 border-b border-slate-100 flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <div class="flex items-center gap-2 mb-1">
+              <div class="w-5 h-5 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0">
+                <svg class="w-3 h-3 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+              <span class="text-xs font-medium text-emerald-600 uppercase tracking-wide">Extracted</span>
+            </div>
+            <h2 id="result-vendor" class="text-xl font-bold text-slate-800"></h2>
+            <p id="result-date" class="text-sm text-slate-400 mt-0.5"></p>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <button onclick="copyToClipboard(this)"
+              class="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 px-3 py-2 rounded-xl transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+              </svg>
+              Copy CSV
+            </button>
+            <button id="excel-btn" onclick="downloadExcel()"
+              class="flex items-center gap-1.5 text-xs font-medium text-emerald-700 hover:text-white bg-emerald-50 hover:bg-emerald-600 border border-emerald-200 hover:border-emerald-600 px-3 py-2 rounded-xl transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>
+              </svg>
+              Download Excel
+            </button>
+            <button onclick="resetToUpload()"
+              class="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-3 py-2 rounded-xl transition-all">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+              </svg>
+              New receipt
+            </button>
+          </div>
+        </div>
+
+        <!-- Line Items Table -->
+        <div class="px-6 py-4">
+          <h3 class="text-xs font-semibold text-slate-400 uppercase tracking-widest mb-3">Line Items</h3>
+          <div class="rounded-2xl border border-slate-100 overflow-hidden">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="bg-slate-50 border-b border-slate-100">
+                  <th class="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider">Item</th>
+                  <th class="text-center px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-20">Qty</th>
+                  <th class="text-right px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wider w-28">Price</th>
+                </tr>
+              </thead>
+              <tbody id="line-items-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Totals -->
+        <div class="px-6 pb-6">
+          <div class="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl border border-indigo-100 p-4">
+            <div id="subtotal-row" class="hidden flex items-center justify-between text-sm mb-2">
+              <span class="text-slate-500">Subtotal</span>
+              <span id="result-subtotal" class="font-medium text-slate-700"></span>
+            </div>
+            <div id="tax-row" class="hidden flex items-center justify-between text-sm mb-2">
+              <span class="text-slate-500">Tax</span>
+              <span id="result-tax" class="font-medium text-slate-700"></span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-800">Total</span>
+              <span id="result-total" class="text-xl font-bold text-indigo-700"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <p class="text-center text-xs text-slate-300 mt-8">
+      Powered by AI vision · Your images are processed securely and never stored
+    </p>
+  </div>
+
+  <script>
+    // ── State ─────────────────────────────────────────────────────────────────
+    let selectedFile = null;
+    let extractedData = null;
+    const STORAGE_KEY = 'receipt_history';
+    const MAX_HISTORY = 25;
+
+    // ── DOM refs ──────────────────────────────────────────────────────────────
+    const dropZone      = document.getElementById('drop-zone');
+    const fileInput     = document.getElementById('file-input');
+    const emptyState    = document.getElementById('empty-state');
+    const previewState  = document.getElementById('preview-state');
+    const analyzeBtn    = document.getElementById('analyze-btn');
+    const loadingState  = document.getElementById('loading-state');
+    const errorState    = document.getElementById('error-state');
+    const resultsState  = document.getElementById('results-state');
+
+    // ── History localStorage helpers ──────────────────────────────────────────
+    function loadHistory() {
+      try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]'); }
+      catch { return []; }
+    }
+
+    function saveHistory(items) {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    }
+
+    function addToHistory(data) {
+      const items = loadHistory();
+      const entry = {
+        id: Date.now().toString(),
+        timestamp: new Date().toISOString(),
+        vendor: data.vendor || 'Unknown Vendor',
+        date: data.date || '',
+        total: data.total,
+        currency: data.currency || '',
+        subtotal: data.subtotal,
+        tax: data.tax,
+        line_items: data.line_items || [],
+      };
+      items.unshift(entry);           // newest first
+      if (items.length > MAX_HISTORY) items.splice(MAX_HISTORY);
+      saveHistory(items);
+      refreshSidebarUI();
+    }
+
+    function deleteHistoryEntry(id) {
+      const items = loadHistory().filter(e => e.id !== id);
+      saveHistory(items);
+      refreshSidebarUI();
+    }
+
+    function clearAllHistory() {
+      if (!confirm('Delete all scan history? This cannot be undone.')) return;
+      saveHistory([]);
+      refreshSidebarUI();
+    }
+
+    // ── Sidebar UI ────────────────────────────────────────────────────────────
+    function refreshSidebarUI() {
+      const items = loadHistory();
+      const listEl  = document.getElementById('history-list');
+      const emptyEl = document.getElementById('history-empty');
+      const countEl = document.getElementById('sidebar-count');
+      const clearBtn  = document.getElementById('clear-all-btn');
+      const exportBtn = document.getElementById('export-all-btn');
+      const toggleBtn = document.getElementById('history-btn-label');
+
+      countEl.textContent = items.length === 1 ? '1 receipt saved' : `${items.length} receipts saved`;
+      toggleBtn.textContent = items.length > 0 ? `Scan History (${items.length})` : 'Scan History';
+
+      if (items.length === 0) {
+        listEl.classList.add('hidden');
+        emptyEl.classList.remove('hidden');
+        clearBtn.classList.add('hidden');
+        exportBtn.classList.add('hidden');
+        return;
+      }
+
+      listEl.classList.remove('hidden');
+      emptyEl.classList.add('hidden');
+      clearBtn.classList.remove('hidden');
+      exportBtn.classList.remove('hidden');
+
+      listEl.innerHTML = '';
+      items.forEach((entry, idx) => {
+        const symbol = getCurrencySymbol(entry.currency);
+        const totalStr = entry.total != null ? `${symbol}${parseFloat(entry.total).toFixed(2)}` : '—';
+        const dateStr = entry.date || '—';
+        const ago = timeAgo(entry.timestamp);
+
+        const li = document.createElement('li');
+        li.className = 'history-item px-4 py-3.5 cursor-pointer group relative slide-in';
+        li.style.animationDelay = `${idx * 30}ms`;
+        li.innerHTML = `
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex-1 min-w-0" onclick="loadHistoryEntry('${entry.id}')">
+              <p class="text-sm font-semibold text-slate-700 truncate">${escHtml(entry.vendor)}</p>
+              <p class="text-xs text-slate-400 mt-0.5 truncate">${escHtml(dateStr)} · ${ago}</p>
+              <p class="text-xs font-bold text-indigo-600 mt-1">${totalStr}</p>
+            </div>
+            <button onclick="deleteHistoryEntry('${entry.id}')"
+              title="Remove"
+              class="flex-shrink-0 mt-0.5 opacity-0 group-hover:opacity-100 text-slate-300 hover:text-rose-400 transition-all p-1 rounded-lg hover:bg-rose-50">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+            </button>
+          </div>
+        `;
+        listEl.appendChild(li);
+      });
+    }
+
+    function loadHistoryEntry(id) {
+      const items = loadHistory();
+      const entry = items.find(e => e.id === id);
+      if (!entry) return;
+      extractedData = entry;
+      renderResults(entry);
+      closeSidebar();
+    }
+
+    // ── Sidebar open/close ────────────────────────────────────────────────────
+    function toggleSidebar() {
+      const sidebar   = document.getElementById('history-sidebar');
+      const backdrop  = document.getElementById('history-backdrop');
+      const isOpen    = sidebar.classList.contains('open');
+      isOpen ? closeSidebar() : openSidebar();
+    }
+
+    function openSidebar() {
+      document.getElementById('history-sidebar').classList.add('open');
+      document.getElementById('history-backdrop').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeSidebar() {
+      document.getElementById('history-sidebar').classList.remove('open');
+      document.getElementById('history-backdrop').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    // ── Drag & drop ───────────────────────────────────────────────────────────
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drop-zone-active'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drop-zone-active'));
+    dropZone.addEventListener('drop', e => {
+      e.preventDefault();
+      dropZone.classList.remove('drop-zone-active');
+      if (e.dataTransfer.files[0]) handleFileSelect(e.dataTransfer.files[0]);
+    });
+    fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFileSelect(fileInput.files[0]); });
+
+    function handleFileSelect(file) {
+      const allowed = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
+      if (!allowed.includes(file.type)) { showError('Unsupported file type. Please upload a PNG, JPG, or WebP image.'); return; }
+      if (file.size > 16 * 1024 * 1024) { showError('File is too large. Maximum size is 16 MB.'); return; }
+      selectedFile = file;
+      const reader = new FileReader();
+      reader.onload = e => { document.getElementById('preview-img').src = e.target.result; };
+      reader.readAsDataURL(file);
+      document.getElementById('preview-filename').textContent = file.name;
+      document.getElementById('preview-filesize').textContent = formatBytes(file.size);
+      emptyState.classList.add('hidden');
+      previewState.classList.remove('hidden');
+      previewState.classList.add('flex');
+      analyzeBtn.disabled = false;
+      resultsState.classList.add('hidden');
+      errorState.classList.add('hidden');
+    }
+
+    function clearFile() {
+      selectedFile = null;
+      fileInput.value = '';
+      emptyState.classList.remove('hidden');
+      previewState.classList.add('hidden');
+      previewState.classList.remove('flex');
+      analyzeBtn.disabled = true;
+    }
+
+    function resetToUpload() {
+      clearFile();
+      resultsState.classList.add('hidden');
+      errorState.classList.add('hidden');
+      loadingState.classList.add('hidden');
+    }
+
+    // ── Analyze ───────────────────────────────────────────────────────────────
+    async function analyzeReceipt() {
+      if (!selectedFile) return;
+      loadingState.classList.remove('hidden');
+      resultsState.classList.add('hidden');
+      errorState.classList.add('hidden');
+      analyzeBtn.disabled = true;
+
+      const bar = document.getElementById('progress-bar');
+      bar.style.width = '0%';
+      bar.classList.add('progress-bar-animate');
+
+      const msgs = ['Analyzing your receipt...', 'Reading line items...', 'Extracting totals...', 'Almost done...'];
+      let mi = 0;
+      const loadingEl = document.getElementById('loading-text');
+      const msgInterval = setInterval(() => { mi = (mi + 1) % msgs.length; loadingEl.textContent = msgs[mi]; }, 2200);
+
+      try {
+        const formData = new FormData();
+        formData.append('file', selectedFile);
+        const response = await fetch('/upload', { method: 'POST', body: formData });
+        const result = await response.json();
+
+        clearInterval(msgInterval);
+        bar.classList.remove('progress-bar-animate');
+        bar.style.width = '100%';
+        await new Promise(r => setTimeout(r, 300));
+        loadingState.classList.add('hidden');
+
+        if (!response.ok || !result.success) {
+          showError(result.error || 'An unexpected error occurred. Please try again.');
+          analyzeBtn.disabled = false;
+          return;
+        }
+
+        extractedData = result.data;
+        addToHistory(result.data);   // ← save to localStorage
+        renderResults(result.data);
+
+      } catch (err) {
+        clearInterval(msgInterval);
+        loadingState.classList.add('hidden');
+        showError('Could not connect to the server. Please check your connection and try again.');
+        analyzeBtn.disabled = false;
+      }
+    }
+
+    // ── Render results ────────────────────────────────────────────────────────
+    function renderResults(data) {
+      document.getElementById('result-vendor').textContent = data.vendor || 'Unknown Vendor';
+      document.getElementById('result-date').textContent = data.date ? `Date: ${data.date}` : '';
+
+      const tbody = document.getElementById('line-items-body');
+      tbody.innerHTML = '';
+      const symbol = getCurrencySymbol(data.currency || '');
+
+      (data.line_items || []).forEach(item => {
+        const tr = document.createElement('tr');
+        tr.className = 'table-row-hover border-b border-slate-50 last:border-0 transition-colors';
+        const itemTotal = (item.price != null) ? (item.quantity || 1) * item.price : null;
+        tr.innerHTML = `
+          <td class="px-4 py-3 text-slate-700">${escHtml(item.item_name || 'Unknown item')}</td>
+          <td class="px-4 py-3 text-center text-slate-500">${item.quantity != null ? item.quantity : '—'}</td>
+          <td class="px-4 py-3 text-right font-medium text-slate-800">${itemTotal != null ? formatCurrency(itemTotal, symbol) : '—'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      if (!data.line_items || data.line_items.length === 0) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td colspan="3" class="px-4 py-6 text-center text-slate-400 text-sm italic">No line items found</td>`;
+        tbody.appendChild(tr);
+      }
+
+      const subtotalRow = document.getElementById('subtotal-row');
+      if (data.subtotal != null) {
+        document.getElementById('result-subtotal').textContent = formatCurrency(data.subtotal, symbol);
+        subtotalRow.classList.remove('hidden'); subtotalRow.classList.add('flex');
+      } else {
+        subtotalRow.classList.add('hidden'); subtotalRow.classList.remove('flex');
+      }
+
+      const taxRow = document.getElementById('tax-row');
+      if (data.tax != null) {
+        document.getElementById('result-tax').textContent = formatCurrency(data.tax, symbol);
+        taxRow.classList.remove('hidden'); taxRow.classList.add('flex');
+      } else {
+        taxRow.classList.add('hidden'); taxRow.classList.remove('flex');
+      }
+
+      document.getElementById('result-total').textContent =
+        data.total != null ? formatCurrency(data.total, symbol) : '—';
+
+      resultsState.classList.remove('hidden');
+    }
+
+    function showError(msg) {
+      document.getElementById('error-message').textContent = msg;
+      errorState.classList.remove('hidden');
+      loadingState.classList.add('hidden');
+    }
+
+    // ── Copy CSV ──────────────────────────────────────────────────────────────
+    function copyToClipboard(btn) {
+      if (!extractedData) return;
+      const rows = [['Item', 'Quantity', 'Price', 'Currency']];
+      (extractedData.line_items || []).forEach(item => {
+        const t = item.price != null ? ((item.quantity || 1) * item.price).toFixed(2) : '';
+        rows.push([item.item_name || '', item.quantity != null ? item.quantity : '', t, extractedData.currency || '']);
+      });
+      rows.push([]);
+      if (extractedData.subtotal != null) rows.push(['Subtotal', '', extractedData.subtotal.toFixed(2), extractedData.currency || '']);
+      if (extractedData.tax != null)      rows.push(['Tax', '', extractedData.tax.toFixed(2), extractedData.currency || '']);
+      if (extractedData.total != null)    rows.push(['Total', '', extractedData.total.toFixed(2), extractedData.currency || '']);
+      const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g,'""')}"`).join(',')).join('\n');
+      navigator.clipboard.writeText(csv).then(() => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> Copied!`;
+        setTimeout(() => { btn.innerHTML = orig; }, 2000);
+      });
+    }
+
+    // ── Download Excel (single receipt) ───────────────────────────────────────
+    function buildWorksheet(data) {
+      const symbol = getCurrencySymbol(data.currency || '');
+      const infoRows = [
+        ['Receipt to Spreadsheet', ''],
+        ['', ''],
+        ['Vendor',   data.vendor || ''],
+        ['Date',     data.date || ''],
+        ['Currency', data.currency || ''],
+        ['', ''],
+      ];
+      const headerRow = ['Item', 'Quantity', 'Unit Price', 'Line Total'];
+      const itemRows = (data.line_items || []).map(item => {
+        const up = item.price != null ? parseFloat(item.price) : null;
+        const qty = item.quantity != null ? item.quantity : 1;
+        return [item.item_name || '', qty, up, up != null ? parseFloat((qty * up).toFixed(2)) : null];
+      });
+      const summaryRows = [];
+      if (data.subtotal != null) summaryRows.push(['', '', 'Subtotal', parseFloat(data.subtotal)]);
+      if (data.tax != null)      summaryRows.push(['', '', 'Tax',      parseFloat(data.tax)]);
+      if (data.total != null)    summaryRows.push(['', '', 'TOTAL',    parseFloat(data.total)]);
+
+      const ws = XLSX.utils.aoa_to_sheet([...infoRows, headerRow, ...itemRows, ['', '', '', ''], ...summaryRows]);
+      ws['!cols'] = [{ wch: 36 }, { wch: 10 }, { wch: 14 }, { wch: 14 }];
+      return ws;
+    }
+
+    function downloadExcel() {
+      if (!extractedData) return;
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, buildWorksheet(extractedData), 'Receipt');
+      const safeName = (extractedData.vendor || 'receipt').replace(/[^a-z0-9]/gi, '_').toLowerCase();
+      const safeDate = (extractedData.date || new Date().toISOString().split('T')[0]).replace(/[^0-9\-]/g, '');
+      XLSX.writeFile(wb, `receipt_${safeName}_${safeDate}.xlsx`);
+
+      const btn = document.getElementById('excel-btn');
+      const orig = btn.innerHTML;
+      btn.innerHTML = `<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> Downloaded!`;
+      setTimeout(() => { btn.innerHTML = orig; }, 2000);
+    }
+
+    // ── Export All History as Excel (multi-sheet) ─────────────────────────────
+    function exportAllExcel() {
+      const items = loadHistory();
+      if (items.length === 0) return;
+      const wb = XLSX.utils.book_new();
+      items.forEach((entry, i) => {
+        const ws = buildWorksheet(entry);
+        const sheetName = `${(entry.vendor || 'Receipt').substring(0, 20)}_${i + 1}`;
+        XLSX.utils.book_append_sheet(wb, ws, sheetName.replace(/[\[\]\*\/\\?:]/g, '_'));
+      });
+      XLSX.writeFile(wb, `receipts_all_${new Date().toISOString().split('T')[0]}.xlsx`);
+    }
+
+    // ── Utility ───────────────────────────────────────────────────────────────
+    function formatBytes(b) {
+      if (b < 1024) return b + ' B';
+      if (b < 1024 * 1024) return (b / 1024).toFixed(1) + ' KB';
+      return (b / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function getCurrencySymbol(code) {
+      const map = { USD:'$', EUR:'€', GBP:'£', JPY:'¥', CAD:'CA$', AUD:'A$', CHF:'Fr',
+                    INR:'₹', CNY:'¥', MXN:'MX$', BRL:'R$', KRW:'₩' };
+      return map[code] || code || '$';
+    }
+
+    function formatCurrency(amount, symbol) {
+      if (amount == null) return '—';
+      return `${symbol}${parseFloat(amount).toFixed(2)}`;
+    }
+
+    function escHtml(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function timeAgo(iso) {
+      const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+      if (diff < 60)   return 'just now';
+      if (diff < 3600) return `${Math.floor(diff/60)}m ago`;
+      if (diff < 86400) return `${Math.floor(diff/3600)}h ago`;
+      return `${Math.floor(diff/86400)}d ago`;
+    }
+
+    // ── Init ──────────────────────────────────────────────────────────────────
+    refreshSidebarUI();
+  </script>
+</body>
+</html>
